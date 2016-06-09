@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/html" id="uploading-app">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Cloud Share</title>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/semantic-ui/2.1.8/semantic.min.css"/>
+    <link rel="stylesheet" href="app.css"/>
+
+    <script src="//cdn.rawgit.com/feathersjs/feathers-client/v1.0.0/dist/feathers.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+
+    <script src="https://code.jquery.com/jquery-2.2.4.min.js"
+            integrity="sha256-BbhdlvQf/xTY9gja0Dq3HiwQF8LaCRTXxZKRutelT44=" crossorigin="anonymous"></script>
+
+    <script>
+        UPLOADCARE_LOCALE = "es";
+        UPLOADCARE_TABS = "file url facebook gdrive dropbox instagram evernote flickr skydrive";
+        UPLOADCARE_PUBLIC_KEY = "24733314000c738651c5";
+    </script>
+    <script charset="utf-8" src="//ucarecdn.com/widget/2.9.0/uploadcare/uploadcare.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/clipboard.js/1.5.10/clipboard.min.js"></script>
+</head>
+<body>
+
+<div class="ui large top fixed hidden menu">
+    <div class="ui container">
+        <a class="active item" href="#app">Compartir archivo...</a>
+        <a class="item" href="#archivos">Mis Archivos</a>
+        <div class="right menu">
+            <div class="item">
+                <a class="ui tiny red button">¿Cómo funciona?</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Sidebar Menu -->
+<div class="ui vertical inverted sidebar menu">
+    <a class="active item" href="#app">Compartir archivo...</a>
+    <a class="item" href="#archivos">Mis Archivos</a>
+</div>
+
+<div id="app" class="pusher">
+    <div class="ui inverted vertical masthead center aligned segment">
+
+        <div class="ui container">
+            <div class="ui large secondary inverted pointing menu">
+                <a class="toc item">
+                    <i class="sidebar icon"></i>
+                </a>
+                <a class="active item" href="#app">Compartir archivo...</a>
+                <a class="item" href="#archivos">Mis Archivos</a>
+                <div class="right item">
+                    <a class="ui tiny inverted button">¿Cómo funciona?</a>
+                </div>
+            </div>
+        </div>
+
+        <div class="ui text container">
+            <h1 class="ui inverted header">
+                Cloud Share
+            </h1>
+            <h2>¿Quieres compartir un archivo?</h2>
+
+            <div class="ui huge blue right labeled icon button" @click="mostrarUpload"
+                 v-bind:class="{ 'loading': loading }">
+                Seleccionar archivo <i class="cloud upload icon"></i>
+            </div>
+
+            <div id="hidden" class="uploadder">
+                <input type="hidden" role="uploadcare-uploader"/>
+            </div>
+        </div>
+
+    </div>
+
+    <div class="ui text container" id="archivos">
+
+        <h1 class="ui top attached header">Mis Archivos</h1>
+        <div class="ui attached raised segment" v-bind:class="{ 'loading': updating }">
+            <ul class="ui list">
+                <div class="item" v-for="share in shares.data">
+                    <div class="right floated content">
+                        <div class="ui medium buttons">
+                            <a class="ui green left labeled icon button {{ 'btn' + $index }}" id="{{ $index }}"
+                               v-on:click="copyLink(share, $event)"><i class="copy icon"></i> Copiar</a>
+                            <div class="or" data-text=""></div>
+                            <div class="ui red right labeled icon button" @click=borrarShare(share)><i
+                                    class="white remove icon"></i> Borrar
+                            </div>
+                        </div>
+                    </div>
+
+                    <i class="{{ share.mimeType | icon }} icon"></i>
+                    <div class="content">
+                        <a class="header" v-bind:href="share.cdnUrl" target="_blank">{{ share.name }}</a>
+                    </div>
+                </div>
+            </ul>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/vue/1.0.24/vue.min.js"></script>
+<script>
+    var hostname = window.location.hostname;
+    var shares = [];
+    var vue_app;
+    var clipboard;
+
+    var current_file = null;
+
+    var upload_widget = uploadcare.SingleWidget('[role=uploadcare-uploader]');
+
+    upload_widget.onChange(function (file) {
+        if (file) {
+            vue_app.loading = true;
+            vue_app.updating = true;
+
+            file.done(function (fileInfo) {
+                vue_app.nuevoShare(fileInfo);
+
+                vue_app.error = false;
+            }).progress(function (uploadInfo) {
+                console.log(uploadInfo);
+            }).fail(function (error, fileInfo) {
+                // Upload failed or something else went wrong.
+                console.log(error);
+                vue_app.error = true;
+            });
+        }
+    });
+
+    var socket = io();
+
+    var app = feathers();
+    app.configure(feathers.socketio(socket));
+    // Retrieve a connection to the /messages service on the server
+    // This service will use websockets for all communication
+    var shares = app.service('shares');
+
+
+    var update_shares = function (shares) {
+        vue_app.shares = shares;
+
+        vue_app.updating = false;
+    };
+
+    var get_shares = function () {
+        vue_app.updating = true;
+
+        shares.find({
+            query: {
+                removed: {
+                    $ne: true
+                },
+                origin: hostname,
+                $sort: {id: -1}
+            }
+        }).then(function (shares) {
+            update_shares(shares);
+
+            console.log(shares.data);
+        });
+    };
+
+
+    shares.on('created', function (shares) {
+        console.log('CREATED', shares);
+
+        get_shares();
+    });
+
+    shares.on('updated', function (share) {
+        console.log('UPDATED', share);
+
+        get_shares();
+    });
+
+    shares.on('removed', function (share) {
+        console.log('DELETED', share);
+
+        get_shares();
+    });
+
+    Vue.filter('icon', function (value) {
+        var icon = 'file outline';
+
+        switch (true) {
+            case /image/.test(value):
+                icon = 'file image outline';
+                break;
+            case /word/.test(value):
+                icon = 'file word outline';
+                break;
+            case /pdf/.test(value):
+                icon = 'file pdf outline';
+                break;
+            case /video/.test(value):
+                icon = 'file video outline';
+                break;
+            case /xls/.test(value):
+                icon = 'file excel outline';
+                break;
+            case /ppt/.test(value):
+                icon = 'file powerpoint outline';
+                break;
+            case /zip|tar|gz|bz2/.test(value):
+                icon = 'file archive outline';
+                break;
+        }
+
+        return icon;
+    });
+
+    vue_app = new Vue({
+        el: '#app',
+        data: {
+            shares: {data: []},
+            updating: false,
+            loading: false,
+            error: false
+        },
+        methods: {
+            mostrarUpload: function () {
+                if (!this.loading) {
+                    upload_widget.openDialog();
+                }
+            },
+            nuevoShare: function (share) {
+                if (typeof share.cdnUrl == 'undefined') {
+                    this.error = true;
+                    return;
+                } else {
+                    this.error = false;
+                }
+
+                share.origin = hostname;
+                share.removed = false;
+
+                this.updating = true;
+
+                this_vue = this;
+                shares.create(share).then(function() {
+                    this_vue.loading = false; // uploading button
+                    upload_widget.value(null); // uploading widget
+
+                });
+            },
+
+            copyLink: function (share, event) {
+                var element = '.btn' + event.target.id;
+
+                if (typeof clipboard != 'undefined') {
+                    clipboard.destroy();
+                }
+
+                clipboard = new Clipboard(element, {
+                    text: function (trigger) {
+                        return share.cdnUrl + '-/inline/yes/';
+                    }
+                });
+
+            },
+            borrarShare: function (share) {
+                this.updating = true;
+                this_vue = this;
+
+                /* soft delete */
+                share.removed = true;
+
+                shares.update(share.id, share).then(function () {
+                    console.log('"DELETED" SUCCESS');
+
+                }, function (error) {
+                    console.log('DELETED ERROR', error);
+                })
+            }
+        },
+        ready: function() {
+            /* shoot the first time */
+            vue_app = this;
+            get_shares();
+        }
+    });
+</script>
+</body>
+</html>
